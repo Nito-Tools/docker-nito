@@ -78,9 +78,12 @@ RUN npm run build
 
 
 FROM node:22-slim
+# node:22-slim already ships a "node" user at uid 1000 (hit during CI:
+# creating a second uid-1000 user fails with useradd exit code 4, "UID
+# already in use") - reuse it rather than creating our own.
 RUN apt-get update && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -u 1000 -m -d /data nito
+    && mkdir -p /data && chown node:node /data
 
 COPY --from=nitod-builder /src/src/nitod /src/src/nito-cli /usr/local/bin/
 COPY --from=backend-builder /backend/dist /app/dist
@@ -97,7 +100,7 @@ ENV NITO_DATA_DIR=/data \
 VOLUME /data
 EXPOSE 3000 8820 8820/udp
 
-USER nito
+USER node
 WORKDIR /app
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "dist/server.js"]
