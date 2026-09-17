@@ -58,7 +58,17 @@ RUN CONFIG_SITE="$(pwd)/depends/$(cat /tmp/host_triplet)/share/config.site" \
 # invocation races two sub-makes against the same shared object files
 # (hit during development: a corrupted crypto/*.lo from exactly this).
 RUN make -j$(nproc) src/nitod && make -j$(nproc) src/nito-cli
-RUN strip src/nitod src/nito-cli
+# Plain `strip` is the build host's native tool - fine when building
+# amd64-on-amd64 or arm64-on-arm64, but on a cross build (e.g. this repo's
+# CI: an amd64 GitHub Actions runner producing the arm64 image) it can't
+# process the foreign-architecture binary at all. Caught by CI, not by
+# local testing, since local testing happened to build natively on
+# matching host/target architectures. Use the matching cross-strip tool.
+RUN case "$TARGETARCH" in \
+      amd64) STRIP=x86_64-linux-gnu-strip ;; \
+      arm64) STRIP=aarch64-linux-gnu-strip ;; \
+    esac; \
+    "$STRIP" src/nitod src/nito-cli
 
 
 FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-builder
