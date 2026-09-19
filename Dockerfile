@@ -1,27 +1,33 @@
 # syntax=docker/dockerfile:1
 #
-# Multi-stage, multi-arch build: compiles nitod/nito-cli from source (no
-# official Nito binaries or Docker image exist, and upstream's own releases
-# have no independent build attestation - see this repo's README), then
-# packages them with an original Node/TypeScript backend and React
-# dashboard, neither of which are derived from any existing project's code.
+# Just the compiled Nito node - nitod/nito-cli, built from source, plus a
+# minimal entrypoint. No dashboard/UI in this image: that's Umbrel-specific
+# and lives as its own companion image in the saltedlolly-nito Umbrel app
+# package instead, connecting to this container's RPC port over the
+# network rather than being bundled in here - this image is meant to be
+# generically useful to anyone wanting to run Nito via Docker, not just
+# Umbrel users, the same way the official ecosystem's own
+# getumbrel/umbrel-bitcoin backend pulls compiled binaries from a separate
+# node image rather than compiling the node itself alongside its dashboard.
+#
+# No official Nito Docker image exists, and upstream's own published
+# release binaries have no independent build attestation (no reproducible-
+# build signing chain, and no CI builds the Linux/ARM64 binaries it
+# actually publishes - they're uploaded manually). This compiles from
+# NitoNetwork/Nito-core's tagged source instead, using its own (inherited
+# from Bitcoin Core, unmodified) depends/ cross-compilation system.
 #
 # The builder stage always runs on the build host's native platform
 # (--platform=$BUILDPLATFORM) regardless of which TARGETARCH is being
-# produced, and cross-compiles via Nito-core's own (unmodified, inherited
-# from Bitcoin Core) depends/ system - proven working in both directions
-# during development (native arm64, and arm64-host-to-x86_64 cross-compile).
-# This avoids ever compiling C++ under QEMU emulation, which would be
-# extremely slow for a multi-arch build.
+# produced, cross-compiling via depends/ rather than under QEMU emulation.
 
 ARG NITO_CORE_TAG=v3.0.1
 
-# Debian bookworm, not Ubuntu - must match the glibc of the node:22-slim
-# (also bookworm) runtime stage below exactly, or the compiled nitod binary
-# fails at startup with GLIBC_2.3x "version not found" errors (hit during
-# development building against Ubuntu 24.04's newer glibc while the
-# runtime stage's glibc was older).
-FROM --platform=$BUILDPLATFORM node:22-bookworm AS nitod-builder
+# Debian bookworm - must match the runtime stage's glibc exactly, or the
+# compiled nitod binary fails at startup with GLIBC_2.3x "version not
+# found" errors (hit during development building against a newer glibc
+# than the runtime stage shipped).
+FROM --platform=$BUILDPLATFORM debian:bookworm AS builder
 ARG NITO_CORE_TAG
 ARG TARGETARCH
 
@@ -42,10 +48,7 @@ RUN case "$TARGETARCH" in \
       *) echo "Unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac
 
-# Dashboard scope is block height/sync/peers/mempool/uptime only (no wallet
-# UI in this app) - NO_WALLET/NO_QT/NO_UPNP/NO_NATPMP/NO_ZMQ/NO_USDT all
-# trim the build to just what nitod/nito-cli need for that, proven in the
-# same shape during development.
+# This image is node-only: no wallet, no Qt GUI, no UPnP/NAT-PMP/ZMQ/USDT.
 RUN cd depends && make HOST="$(cat /tmp/host_triplet)" \
       NO_QT=1 NO_WALLET=1 NO_UPNP=1 NO_NATPMP=1 NO_ZMQ=1 NO_USDT=1 -j$(nproc)
 
@@ -59,11 +62,11 @@ RUN CONFIG_SITE="$(pwd)/depends/$(cat /tmp/host_triplet)/share/config.site" \
 # (hit during development: a corrupted crypto/*.lo from exactly this).
 RUN make -j$(nproc) src/nitod && make -j$(nproc) src/nito-cli
 # Plain `strip` is the build host's native tool - fine when building
-# amd64-on-amd64 or arm64-on-arm64, but on a cross build (e.g. this repo's
-# CI: an amd64 GitHub Actions runner producing the arm64 image) it can't
-# process the foreign-architecture binary at all. Caught by CI, not by
-# local testing, since local testing happened to build natively on
-# matching host/target architectures. Use the matching cross-strip tool.
+# amd64-on-amd64 or arm64-on-arm64, but on a genuine cross build (e.g. this
+# repo's own CI: an amd64 GitHub Actions runner producing the arm64 image)
+# it can't process the foreign-architecture binary at all (caught by CI,
+# not local testing, since local testing happened to build on matching
+# host/target architectures). Use the matching cross-strip tool.
 RUN case "$TARGETARCH" in \
       amd64) STRIP=x86_64-linux-gnu-strip ;; \
       arm64) STRIP=aarch64-linux-gnu-strip ;; \
@@ -71,46 +74,19 @@ RUN case "$TARGETARCH" in \
     "$STRIP" src/nitod src/nito-cli
 
 
-FROM --platform=$BUILDPLATFORM node:22-slim AS frontend-builder
-WORKDIR /frontend
-COPY frontend/package*.json ./
-RUN npm ci
-COPY frontend/ ./
-RUN npm run build
-
-
-FROM --platform=$BUILDPLATFORM node:22-slim AS backend-builder
-WORKDIR /backend
-COPY backend/package*.json ./
-RUN npm ci
-COPY backend/ ./
-RUN npm run build
-
-
-FROM node:22-slim
-# node:22-slim already ships a "node" user at uid 1000 (hit during CI:
-# creating a second uid-1000 user fails with useradd exit code 4, "UID
-# already in use") - reuse it rather than creating our own.
-RUN apt-get update && apt-get install -y --no-install-recommends tini \
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends tini ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data && chown node:node /data
+    && useradd -u 1000 -m -d /data nito \
+    && mkdir -p /data && chown nito:nito /data
 
-COPY --from=nitod-builder /src/src/nitod /src/src/nito-cli /usr/local/bin/
-COPY --from=backend-builder /backend/dist /app/dist
-COPY --from=backend-builder /backend/node_modules /app/node_modules
-COPY --from=backend-builder /backend/package.json /app/package.json
-COPY --from=frontend-builder /frontend/dist /app/public
+COPY --from=builder /src/src/nitod /src/src/nito-cli /usr/local/bin/
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
-ENV NITO_DATA_DIR=/data \
-    NITO_BIN=/usr/local/bin/nitod \
-    NITO_CLI_BIN=/usr/local/bin/nito-cli \
-    NODE_ENV=production \
-    PORT=3000
-
+ENV NITO_DATA_DIR=/data
 VOLUME /data
-EXPOSE 3000 8820 8820/udp
+EXPOSE 8820 8820/udp 8825
 
-USER node
-WORKDIR /app
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "dist/server.js"]
+USER nito
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
