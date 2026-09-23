@@ -75,7 +75,7 @@ RUN case "$TARGETARCH" in \
 
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends tini ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends tini gosu ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -u 1000 -m -d /data nito \
     && mkdir -p /data && chown nito:nito /data
@@ -88,5 +88,10 @@ ENV NITO_DATA_DIR=/data
 VOLUME /data
 EXPOSE 8820 8820/udp 8825
 
-USER nito
+# Stays root here rather than USER nito - Umbrel (and any other bind-mount
+# user) creates the host-side /data directory owned by whatever UID it
+# runs as, not UID 1000, so a container that started directly as nito
+# could never write to it ("Permission denied" on the very first boot).
+# entrypoint.sh fixes ownership while still root, then drops to nito via
+# gosu before exec'ing nitod.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]

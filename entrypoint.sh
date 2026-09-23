@@ -4,6 +4,17 @@ set -eu
 DATA_DIR="${NITO_DATA_DIR:-/data}"
 mkdir -p "$DATA_DIR"
 
+# The container starts as root (see Dockerfile) because a bind-mounted
+# host directory (e.g. Umbrel's ${APP_DATA_DIR}/data/nito) is created by
+# whatever UID the host runs as, not UID 1000 - a fresh mount is normally
+# root-owned, so the nito user couldn't write nito.conf on first boot.
+# Fix ownership once (skip if already correct, so a large existing chain
+# state doesn't pay a recursive chown on every restart), then drop
+# privileges before running nitod.
+if [ "$(stat -c '%u' "$DATA_DIR")" != "1000" ]; then
+  chown -R nito:nito "$DATA_DIR"
+fi
+
 NETWORK="${NITO_NETWORK:-main}"
 case "$NETWORK" in
   main) SECTION="[main]" ;;
@@ -41,4 +52,4 @@ CONF_FILE="$DATA_DIR/nito.conf"
   echo "port=${NITO_P2P_PORT:-8820}"
 } > "$CONF_FILE"
 
-exec nitod -datadir="$DATA_DIR" -conf="$CONF_FILE" -printtoconsole
+exec gosu nito nitod -datadir="$DATA_DIR" -conf="$CONF_FILE" -printtoconsole
