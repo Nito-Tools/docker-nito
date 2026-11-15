@@ -3,9 +3,12 @@
 A Docker image that runs a full [Nito](https://nito.network/) node, compiled from source. No wallet, no GUI, no dashboard - just `nitod` and `nito-cli`, for anyone wanting to run a Nito node with Docker. Built for `linux/amd64` and `linux/arm64`.
 
 ```
-ghcr.io/nito-tools/docker-nito:latest
-ghcr.io/nito-tools/docker-nito:v4.0.0
+ghcr.io/nito-tools/docker-nito:latest     newest build of the newest Nito Core
+ghcr.io/nito-tools/docker-nito:v4.0.0     newest build of Nito Core v4.0.0
+ghcr.io/nito-tools/docker-nito:v4.0.0-1   one exact build, never changes
 ```
+
+See [Versions and releases](#versions-and-releases).
 
 ## Easiest way: Umbrel
 
@@ -94,9 +97,25 @@ Updates are automatic up to the point of publishing:
 
 1. Once a day, [check-nito-core.yml](.github/workflows/check-nito-core.yml) compares Nito Core's latest release with the Dockerfile. When there's a newer one, it opens a pull request that updates the three `ARG`s, with the release notes, the pinned commit and whether the tag is signed, and starts a test build.
 2. [build-publish.yml](.github/workflows/build-publish.yml) builds both architectures on every pull request without publishing anything.
-3. Merging to `main` publishes `ghcr.io/nito-tools/docker-nito:<tag>` and `:latest`.
+3. Merging to `main` publishes the image and creates a GitHub Release (see below).
 
 New Nito Core releases are often hard forks or need build changes (v4 added Rust), so a person reads the release notes and merges each update.
+
+## Versions and releases
+
+Every published image gets a version made of the Nito Core version and a build number: `v4.0.0-1`, `v4.0.0-2`, and so on. The number goes up whenever the image is rebuilt with the same Nito Core version (a fix to the entrypoint or Dockerfile, or newer Debian packages), and starts again at 1 for a new Nito Core version.
+
+| Tag | Points to | Changes? |
+|---|---|---|
+| `v4.0.0-1` | one exact build | Never |
+| `v4.0.0` | the newest build of Nito Core v4.0.0 | Yes, with each rebuild |
+| `latest` | the newest build of all | Yes |
+
+Each published build has a [GitHub Release](https://github.com/Nito-Tools/docker-nito/releases) with the same name, listing what changed and the image digest. To stay on one exact build, pin the numbered tag, or the digest as the Umbrel app does: `ghcr.io/nito-tools/docker-nito:v4.0.0-1@sha256:...`.
+
+The image's labels record where it came from: `docker inspect` shows the docker-nito commit (`org.opencontainers.image.revision`), its version, and the Nito Core version and commit (`network.nito.core.version`, `network.nito.core.commit`).
+
+Builds published before numbering started (`v3.0.1`, and the first `v4.0.0`) have no number or release.
 
 ## Environment variables
 
