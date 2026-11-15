@@ -1,8 +1,76 @@
 # docker-nito
 
-A Docker image that runs a full [Nito](https://nito.network/) node, compiled from source. No wallet, no GUI, no dashboard - just `nitod`, built for anyone wanting to run a Nito node via Docker.
+A Docker image that runs a full [Nito](https://nito.network/) node, compiled from source. No wallet, no GUI, no dashboard - just `nitod` and `nito-cli`, for anyone wanting to run a Nito node with Docker. Built for `linux/amd64` and `linux/arm64`.
 
-Used as the node container for the [saltedlolly/umbrel-app-store](https://github.com/saltedlolly/umbrel-app-store) `saltedlolly-nito` Umbrel package, paired with [nito-dashboard](https://github.com/saltedlolly/nito-dashboard) as a separate companion container for the web UI - see that repo for why the dashboard isn't bundled in here.
+```
+ghcr.io/nito-tools/docker-nito:latest
+ghcr.io/nito-tools/docker-nito:v4.0.0
+```
+
+## Easiest way: Umbrel
+
+If you have an [Umbrel](https://umbrel.com/) home server, the **Nito** app runs this image for you, with a dashboard showing new blocks, sync progress and a map of your peers. Add the community app store `https://github.com/saltedlolly/umbrel-app-store` in the Umbrel App Store (the menu at the top right, then Community App Stores), then install Nito. Details: [saltedlolly-nito](https://github.com/saltedlolly/umbrel-app-store/tree/master/saltedlolly-nito). The dashboard is a separate container, [nito-dashboard](https://github.com/saltedlolly/umbrel-app-store/tree/master/saltedlolly-nito/docker-containers/nito-dashboard), that talks to this one over RPC.
+
+## Running it with Docker
+
+**Mount a volume at `/data`.** Everything the node keeps (the blockchain, chainstate, indexes, peers, `nito.conf`) lives there. Without a volume, Docker gives the container an anonymous volume: a restart keeps it, but when you replace the container to upgrade (`docker rm` then `docker run` with the new image), the new container starts empty and syncs the whole chain again, while the old data sits orphaned on disk.
+
+With `docker run`:
+
+```bash
+docker volume create nito-data
+
+docker run -d --name nito \
+  --restart unless-stopped \
+  -v nito-data:/data \
+  -p 8820:8820 \
+  -e NITO_RPC_USER=nito \
+  -e NITO_RPC_PASSWORD='choose-a-long-random-password' \
+  ghcr.io/nito-tools/docker-nito:v4.0.0
+```
+
+To upgrade, pull the new image, then remove and recreate the container with the same `-v nito-data:/data`. The chain is kept.
+
+```bash
+docker pull ghcr.io/nito-tools/docker-nito:v4.0.0
+docker rm -f nito
+docker run -d --name nito ...   # the same command as above
+```
+
+With Docker Compose:
+
+```yaml
+services:
+  nito:
+    image: ghcr.io/nito-tools/docker-nito:v4.0.0
+    restart: unless-stopped
+    ports:
+      - "8820:8820"
+    environment:
+      NITO_RPC_USER: nito
+      NITO_RPC_PASSWORD: choose-a-long-random-password
+    volumes:
+      - nito-data:/data
+
+volumes:
+  nito-data:
+```
+
+Or use a host folder instead of a named volume, e.g. `-v /srv/nito:/data`. The container fixes the folder's ownership on start, so it doesn't matter who created it.
+
+Useful commands:
+
+```bash
+docker logs -f nito
+docker exec nito nito-cli -datadir=/data -conf=/data/nito.conf getblockchaininfo
+```
+
+Notes:
+
+- **Port 8820** is for other nodes to connect to yours. Forward it on your router to help the network. Don't publish the RPC port (8825) to the internet; containers on the same Docker network can reach it without publishing it.
+- **`nito.conf` is rewritten on every start** from the environment variables below, so change settings there, not in the file.
+- **There's no wallet.** The image is built without one, so there are no keys in the container to back up or lose.
+- **Backups:** the chain data can always be downloaded again, so there's no need to back up `blocks`, `chainstate` or `indexes` (they're most of the size).
 
 ## Why build from source
 
