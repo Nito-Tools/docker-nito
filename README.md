@@ -83,7 +83,7 @@ No official Nito Docker image exists, and upstream's own published release binar
 
 Multi-arch, cross-compiling through `depends/` rather than emulating compilation under QEMU: the builder stage always runs natively on the build host (`--platform=$BUILDPLATFORM`), regardless of which architecture is being produced. Built with wallet/Qt/UPnP/NAT-PMP/ZMQ/USDT all disabled - this image is a node only, nothing else.
 
-From v4, Nito Core builds its Orchard proof engine in Rust even with the wallet turned off, so the builder stage is the official `rust` image for Debian bookworm, using the Rust version Nito Core pins in its `rust-toolchain.toml`.
+From v4, Nito Core builds its Orchard proof engine in Rust even with the wallet turned off, so the builder stage is the official `rust` image for the same Debian release as the runtime stage (Debian 13 trixie, set by `DEBIAN_RELEASE` in the Dockerfile), using the Rust version Nito Core pins in its `rust-toolchain.toml`.
 
 ## Nito Core version and updates
 

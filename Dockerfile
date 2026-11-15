@@ -32,13 +32,17 @@
 ARG NITO_CORE_TAG=v4.0.0
 ARG NITO_CORE_COMMIT=e3ff5e42b980c792ee5ab790610772a7d9ee8f8a
 ARG RUST_VERSION=1.97.0
+# Debian release for both stages. They must match: nitod is built against
+# the builder's glibc and has to run on the same one. Change it by hand
+# when moving to a new Debian release (trixie = Debian 13).
+ARG DEBIAN_RELEASE=trixie
 
-# Debian bookworm - must match the runtime stage's glibc exactly, or the
+# Same Debian release as the runtime stage - must match its glibc exactly, or the
 # compiled nitod binary fails at startup with GLIBC_2.3x "version not
 # found" errors (hit during development building against a newer glibc
 # than the runtime stage shipped). The official rust image is Debian
-# bookworm with rustup and the pinned Rust toolchain already installed.
-FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-bookworm AS builder
+# with rustup and the pinned Rust toolchain already installed.
+FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-${DEBIAN_RELEASE} AS builder
 ARG NITO_CORE_TAG
 ARG NITO_CORE_COMMIT
 ARG TARGETARCH
@@ -115,8 +119,8 @@ RUN case "$TARGETARCH" in \
     "$STRIP" src/nitod src/nito-cli
 
 
-FROM debian:bookworm-slim
-# upgrade as well as install: the debian:bookworm-slim image is only
+FROM debian:${DEBIAN_RELEASE}-slim
+# upgrade as well as install: the debian slim image is only
 # refreshed every few weeks, and the monthly no-cache rebuild (see
 # build-publish.yml) is meant to pick up security updates published since.
 RUN apt-get update && apt-get upgrade -y \
