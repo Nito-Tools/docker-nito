@@ -5,8 +5,10 @@ name: Build and publish
 #
 # - Pull requests (and manual runs on any branch other than main) build
 #   both architectures as a test, without publishing anything.
-# - Pushes to main, and manual runs on main, build and publish to GHCR as
-#   :<nito-core-tag> and :latest.
+# - Pushes to main, and manual runs on main, build and publish to GHCR,
+#   then create a GitHub Release. Each published build gets a number for
+#   its Nito Core version: v4.0.0-1, v4.0.0-2, ... Those tags never
+#   change. :v4.0.0 and :latest move to the newest build.
 #
 # Pull requests opened by check-nito-core.yml use GITHUB_TOKEN, which
 # GitHub doesn't let trigger pull_request workflows, so that workflow
@@ -19,12 +21,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a publish half-way; test builds can be replaced.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  IMAGE: ghcr.io/nito-tools/docker-nito
 
 jobs:
   build:
@@ -33,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Read the Nito Core version from the Dockerfile
+      - name: Work out the version
         id: version
         run: |
           set -euo pipefail
@@ -43,13 +49,40 @@ jobs:
             echo "::error::Couldn't read NITO_CORE_TAG and NITO_CORE_COMMIT from the Dockerfile"
             exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_REF" = "refs/heads/main" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
+            publish=true
           else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+            publish=false
           fi
-          echo "Nito Core $tag ($commit)" >> "$GITHUB_STEP_SUMMARY"
+
+          # Next build number for this Nito Core version: one more than the
+          # highest already used, looking at both Git tags and image tags,
+          # so a run that pushed an image but failed to create its release
+          # never has its number reused.
+          git_tags="$(git ls-remote --tags --refs origin "refs/tags/$tag-*" | sed 's|.*refs/tags/||')"
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${IMAGE#ghcr.io/}:pull" | jq -r .token)"
+          image_tags="$(curl -fsS -H "Authorization: Bearer $token" "https://${IMAGE%%/*}/v2/${IMAGE#ghcr.io/}/tags/list" | jq -r '.tags[]?' || true)"
+          last="$(printf '%s\n%s\n' "$git_tags" "$image_tags" \
+            | sed -n "s/^$(printf '%s' "$tag" | sed 's/\./\\./g')-\([0-9][0-9]*\)$/\1/p" \
+            | sort -n | tail -1)"
+          version="$tag-$(( ${last:-0} + 1 ))"
+
+          {
+            echo "tag=$tag"
+            echo "commit=$commit"
+            echo "version=$version"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "Nito Core $tag (\`$commit\`)"
+            if [ "$publish" = "true" ]; then
+              echo
+              echo "Publishing as **$version**, \`:$tag\` and \`:latest\`."
+            else
+              echo
+              echo "Test build only, not published (would be $version)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
@@ -62,6 +95,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build${{ steps.version.outputs.publish == 'true' && ' and push' || ' (test only, not published)' }}
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -70,5 +104,49 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ghcr.io/nito-tools/docker-nito:${{ steps.version.outputs.tag }}
-            ghcr.io/nito-tools/docker-nito:latest
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE }}:${{ steps.version.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          # Labels go on each architecture's image (docker inspect shows
+          # them); annotations on the multi-arch index, which is what GHCR
+          # reads to link the package to this repo and show a description.
+          labels: |
+            org.opencontainers.image.title=docker-nito
+            org.opencontainers.image.description=Nito full node (nitod and nito-cli), built from source
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            network.nito.core.version=${{ steps.version.outputs.tag }}
+            network.nito.core.commit=${{ steps.version.outputs.commit }}
+          annotations: |
+            index:org.opencontainers.image.title=docker-nito
+            index:org.opencontainers.image.description=Nito full node (nitod and nito-cli), built from source
+            index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
+            index:org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Create the GitHub Release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          COMMIT: ${{ steps.version.outputs.commit }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Nito Core **$TAG** ([release notes](https://github.com/NitoNetwork/Nito-core/releases/tag/$TAG)), built from source at \`$COMMIT\`, for linux/amd64 and linux/arm64."
+            echo
+            echo '```'
+            echo "docker pull $IMAGE:$VERSION"
+            echo '```'
+            echo
+            echo "- Image digest: \`$DIGEST\`"
+            echo "- Also tagged \`:$TAG\` and \`:latest\` (until a newer build)."
+            echo "- Pin exactly: \`$IMAGE:$VERSION@$DIGEST\`"
+          } > release-notes.md
+          # --generate-notes adds the pull requests and commits since the
+          # previous release below this.
+          gh release create "$VERSION" --target "$GITHUB_SHA" \
+            --title "$VERSION" --notes-file release-notes.md --generate-notes
