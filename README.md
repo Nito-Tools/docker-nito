@@ -130,6 +130,17 @@ Builds published before numbering started (`v3.0.1`, and the first `v4.0.0`) hav
 | `NITO_RPC_PORT` | `8825` | RPC port |
 | `NITO_RPC_ALLOW_IP` | `0.0.0.0/0` | RPC allowlist CIDR - callers wanting a dashboard/wallet container to reach RPC without opening it to everything should scope this to their own subnet (Umbrel's own `saltedlolly-nito` package passes `${NETWORK_IP}/16`, Umbrel's documented mechanism for exactly this) |
 | `NITO_P2P_PORT` | `8820` | Swarm/peer port - publish this one |
+| `NITO_TXINDEX` | *(unset)* | `txindex`: look up any transaction by its ID with `getrawtransaction`, as explorers do. `0` or `1`; unset keeps Nito Core's default (on) |
+| `NITO_TRANSPARENTHISTORYINDEX` | *(unset)* | `transparenthistoryindex`: restore a wallet from its recovery phrase on a node that already has the chain. Day-to-day wallet use doesn't need it. `0` or `1`; unset keeps Nito Core's default (on) |
+| `NITO_ORCHARDINDEX` | *(unset)* | `orchardindex`: needed for any Bech32x (private) wallet use and for restoring private funds. Small until Orchard activates at block 1,165,432, then grows with use. `0` or `1`; unset keeps Nito Core's default (on) |
+
+**Indexes.** Nito Core v4 builds all three indexes by default. A node with no wallet (for example one that only supports the network) needs none of them: on mainnet they took about 700 MB at block 1.1 million, mostly `transparenthistoryindex`. Setting one to `0` switches it off and **deletes its files** at the next start; setting it back to `1` (or unsetting it) rebuilds it from the chain. Pruning (`-prune`) can't be combined with `txindex` or `transparenthistoryindex` switched on.
+
+**Other `nitod` options.** Anything given as the container's command is passed straight to `nitod`, e.g. `-dbcache=1000 -maxconnections=40` after the image name in `docker run`, or in Compose:
+
+```yaml
+    command: ["-dbcache=1000", "-maxconnections=40"]
+```
 
 ## Building locally
 
