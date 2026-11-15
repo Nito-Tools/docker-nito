@@ -1,42 +1,74 @@
 name: Build and publish
 
+# The Nito Core version comes from the ARG lines at the top of the
+# Dockerfile, so there is one place to change it.
+#
+# - Pull requests (and manual runs on any branch other than main) build
+#   both architectures as a test, without publishing anything.
+# - Pushes to main, and manual runs on main, build and publish to GHCR as
+#   :<nito-core-tag> and :latest.
+#
+# Pull requests opened by check-nito-core.yml use GITHUB_TOKEN, which
+# GitHub doesn't let trigger pull_request workflows, so that workflow
+# starts this one with workflow_dispatch on the PR branch instead.
+
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
-    inputs:
-      nito_core_tag:
-        description: 'Nito-core tag to build (e.g. v3.0.1)'
-        required: true
-        default: 'v3.0.1'
 
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
+
+      - name: Read the Nito Core version from the Dockerfile
+        id: version
+        run: |
+          set -euo pipefail
+          tag="$(sed -n 's/^ARG NITO_CORE_TAG=//p' Dockerfile)"
+          commit="$(sed -n 's/^ARG NITO_CORE_COMMIT=//p' Dockerfile)"
+          if [ -z "$tag" ] || [ -z "$commit" ]; then
+            echo "::error::Couldn't read NITO_CORE_TAG and NITO_CORE_COMMIT from the Dockerfile"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Nito Core $tag ($commit)" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4
+        if: steps.version.outputs.publish == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build${{ steps.version.outputs.publish == 'true' && ' and push' || ' (test only, not published)' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            NITO_CORE_TAG=${{ github.event.inputs.nito_core_tag || 'v3.0.1' }}
+          push: ${{ steps.version.outputs.publish == 'true' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
-            ghcr.io/nito-tools/docker-nito:${{ github.event.inputs.nito_core_tag || 'v3.0.1' }}
+            ghcr.io/nito-tools/docker-nito:${{ steps.version.outputs.tag }}
+            ghcr.io/nito-tools/docker-nito:latest

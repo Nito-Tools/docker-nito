@@ -1,0 +1,149 @@
+name: Check for a new Nito Core release
+
+# Once a day, compare Nito Core's latest release with the version in the
+# Dockerfile. When there's a newer one, open a pull request that updates
+# NITO_CORE_TAG, NITO_CORE_COMMIT and RUST_VERSION, then start a test
+# build on it. Nothing is published until a person reviews the release
+# notes and merges the pull request.
+#
+# Needs "Allow GitHub Actions to create and approve pull requests" on in
+# Settings > Actions > General.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: check-nito-core
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      UPSTREAM: NitoNetwork/Nito-core
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare versions
+        id: compare
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/^ARG NITO_CORE_TAG=//p' Dockerfile)"
+          # /releases/latest skips drafts and pre-releases.
+          latest="$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)"
+          echo "Dockerfile: $current, latest release: $latest"
+          if [ -z "$latest" ] || [ "$latest" = "$current" ]; then
+            echo "update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only move forward: an older "latest" (e.g. a re-published
+          # point release on an old branch) shouldn't open a downgrade PR.
+          newest="$(printf '%s\n%s\n' "${current#v}" "${latest#v}" | sort -V | tail -1)"
+          if [ "$newest" != "${latest#v}" ]; then
+            echo "Latest release $latest is older than $current; nothing to do."
+            echo "update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="nito-core-$latest"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "Branch $branch already exists; a pull request is probably open already."
+            echo "update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "update=true"
+            echo "current=$current"
+            echo "latest=$latest"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the release tag
+        if: steps.compare.outputs.update == 'true'
+        id: tag
+        env:
+          LATEST: ${{ steps.compare.outputs.latest }}
+        run: |
+          set -euo pipefail
+          ref="$(gh api "repos/$UPSTREAM/git/ref/tags/$LATEST")"
+          type="$(jq -r .object.type <<<"$ref")"
+          sha="$(jq -r .object.sha <<<"$ref")"
+          signed="no (lightweight tag, can't be signed)"
+          if [ "$type" = "tag" ]; then
+            tag="$(gh api "repos/$UPSTREAM/git/tags/$sha")"
+            sha="$(jq -r .object.sha <<<"$tag")"
+            if [ "$(jq -r .verification.verified <<<"$tag")" = "true" ]; then
+              signed="yes (GitHub verified the tag signature)"
+            else
+              signed="**no** ($(jq -r .verification.reason <<<"$tag"))"
+            fi
+          fi
+          toolchain="$(gh api "repos/$UPSTREAM/contents/rust-toolchain.toml?ref=$sha" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)"
+          rust="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' <<<"$toolchain")"
+          {
+            echo "commit=$sha"
+            echo "signed=$signed"
+            echo "rust=$rust"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open a pull request
+        if: steps.compare.outputs.update == 'true'
+        env:
+          CURRENT: ${{ steps.compare.outputs.current }}
+          LATEST: ${{ steps.compare.outputs.latest }}
+          BRANCH: ${{ steps.compare.outputs.branch }}
+          COMMIT: ${{ steps.tag.outputs.commit }}
+          SIGNED: ${{ steps.tag.outputs.signed }}
+          RUST: ${{ steps.tag.outputs.rust }}
+        run: |
+          set -euo pipefail
+          sed -i "s/^ARG NITO_CORE_TAG=.*/ARG NITO_CORE_TAG=$LATEST/" Dockerfile
+          sed -i "s/^ARG NITO_CORE_COMMIT=.*/ARG NITO_CORE_COMMIT=$COMMIT/" Dockerfile
+          if [ -n "$RUST" ]; then
+            sed -i "s/^ARG RUST_VERSION=.*/ARG RUST_VERSION=$RUST/" Dockerfile
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git commit -am "Update Nito Core to $LATEST"
+          git push origin "$BRANCH"
+
+          notes="$(gh release view "$LATEST" -R "$UPSTREAM" --json body --jq .body)"
+          {
+            echo "Nito Core **$LATEST** is out (this image is on $CURRENT)."
+            echo
+            echo "- Release: https://github.com/$UPSTREAM/releases/tag/$LATEST"
+            echo "- Changes: https://github.com/$UPSTREAM/compare/$CURRENT...$LATEST"
+            echo "- Commit pinned: \`$COMMIT\`"
+            echo "- Tag signed: $SIGNED"
+            echo "- Rust toolchain: ${RUST:-none (no rust-toolchain.toml)}"
+            echo
+            echo "A test build of both architectures has been started on this branch; its result shows in the checks below. Nothing is published until this is merged."
+            echo
+            echo "Before merging, check:"
+            echo "- [ ] the release notes (below) for hard forks, new build dependencies or changed defaults"
+            echo "- [ ] the test build passed"
+            echo "- [ ] that the Umbrel app and anything else using this image is ready for the new version"
+            echo
+            echo "<details><summary>Release notes</summary>"
+            echo
+            printf '%s\n' "$notes"
+            echo
+            echo "</details>"
+          } > pr-body.md
+
+          gh pr create --base main --head "$BRANCH" \
+            --title "Update Nito Core to $LATEST" --body-file pr-body.md
+
+          # Pull requests opened with GITHUB_TOKEN don't trigger the
+          # pull_request event, so start the test build directly.
+          gh workflow run build-publish.yml --ref "$BRANCH"
