@@ -116,7 +116,11 @@ RUN case "$TARGETARCH" in \
 
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends tini gosu ca-certificates \
+# upgrade as well as install: the debian:bookworm-slim image is only
+# refreshed every few weeks, and the monthly no-cache rebuild (see
+# build-publish.yml) is meant to pick up security updates published since.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends tini gosu ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -u 1000 -m -d /data nito \
     && mkdir -p /data && chown nito:nito /data

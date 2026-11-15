@@ -115,6 +115,8 @@ Each published build has a [GitHub Release](https://github.com/Nito-Tools/docker
 
 The image's labels record where it came from: `docker inspect` shows the docker-nito commit (`org.opencontainers.image.revision`), its version, and the Nito Core version and commit (`network.nito.core.version`, `network.nito.core.commit`).
 
+**Debian security updates.** Builds reuse cached layers, so a normal rebuild wouldn't pick up new Debian packages. On the 3rd of each month, the workflow checks the published image for Debian package updates. If there are any, it rebuilds without the cache and publishes the next build number, with the updated packages listed in its release. If there are none, nothing is built or published. To rebuild without the cache at any other time, run "Build and publish" by hand on `main` with "Rebuild without cache" ticked.
+
 Builds published before numbering started (`v3.0.1`, and the first `v4.0.0`) have no number or release.
 
 ## Environment variables
