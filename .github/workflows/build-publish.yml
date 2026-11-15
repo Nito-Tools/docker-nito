@@ -13,12 +13,29 @@ name: Build and publish
 # Pull requests opened by check-nito-core.yml use GITHUB_TOKEN, which
 # GitHub doesn't let trigger pull_request workflows, so that workflow
 # starts this one with workflow_dispatch on the PR branch instead.
+#
+# Builds normally reuse cached layers, including the runtime stage's
+# apt-get install, so a plain rebuild wouldn't pick up Debian security
+# updates. Two ways round that:
+# - Run it by hand with "Rebuild without cache" ticked.
+# - Once a month the schedule checks the published image for Debian
+#   package updates, and only if there are some rebuilds it without cache
+#   and publishes the next build number. No updates, no new build, so
+#   anything pinning by digest (the Umbrel app) isn't offered a pointless
+#   update.
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '41 5 3 * *'
   workflow_dispatch:
+    inputs:
+      no_cache:
+        description: 'Rebuild without cache (picks up new Debian packages)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -33,7 +50,46 @@ env:
   IMAGE: ghcr.io/nito-tools/docker-nito
 
 jobs:
+  debian-updates:
+    # Only the monthly schedule asks this; every other trigger skips it.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      rebuild: ${{ steps.check.outputs.rebuild }}
+      packages: ${{ steps.check.outputs.packages }}
+    steps:
+      - name: Check the published image for Debian package updates
+        id: check
+        run: |
+          set -euo pipefail
+          # Both architectures install the same packages, so amd64 is enough.
+          upgradable="$(docker run --rm --platform linux/amd64 --pull always --entrypoint sh "$IMAGE:latest" \
+            -c 'apt-get update -qq >/dev/null && apt list --upgradable 2>/dev/null' \
+            | grep -v '^Listing' || true)"
+          if [ -n "$upgradable" ]; then
+            echo "rebuild=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "packages<<EOF"
+              printf '%s\n' "$upgradable"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo "Debian updates waiting in $IMAGE:latest, rebuilding:"
+              echo '```'
+              printf '%s\n' "$upgradable"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "rebuild=false" >> "$GITHUB_OUTPUT"
+            echo "No Debian updates waiting in $IMAGE:latest, nothing to rebuild." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   build:
+    needs: debian-updates
+    # Runs for every trigger except a monthly check that found no updates.
+    # always() because a skipped needs-job would otherwise skip this too.
+    if: always() && (needs.debian-updates.result == 'skipped' || needs.debian-updates.outputs.rebuild == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
@@ -101,6 +157,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: ${{ steps.version.outputs.publish == 'true' }}
+          # The fresh layers are still saved to the cache for later builds.
+          no-cache: ${{ github.event_name == 'schedule' || inputs.no_cache == true }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
@@ -133,9 +191,22 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           COMMIT: ${{ steps.version.outputs.commit }}
           DIGEST: ${{ steps.build.outputs.digest }}
+          NO_CACHE: ${{ github.event_name == 'schedule' || inputs.no_cache == true }}
+          DEBIAN_UPDATES: ${{ needs.debian-updates.outputs.packages }}
         run: |
           set -euo pipefail
           {
+            if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+              echo "Monthly rebuild to pick up Debian package updates. Nito Core is unchanged."
+              echo
+              echo '```'
+              printf '%s\n' "$DEBIAN_UPDATES"
+              echo '```'
+              echo
+            elif [ "$NO_CACHE" = "true" ]; then
+              echo "Rebuilt without cache (started by hand), picking up the latest Debian packages."
+              echo
+            fi
             echo "Nito Core **$TAG** ([release notes](https://github.com/NitoNetwork/Nito-core/releases/tag/$TAG)), built from source at \`$COMMIT\`, for linux/amd64 and linux/arm64."
             echo
             echo '```'

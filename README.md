@@ -83,7 +83,7 @@ No official Nito Docker image exists, and upstream's own published release binar
 
 Multi-arch, cross-compiling through `depends/` rather than emulating compilation under QEMU: the builder stage always runs natively on the build host (`--platform=$BUILDPLATFORM`), regardless of which architecture is being produced. Built with wallet/Qt/UPnP/NAT-PMP/ZMQ/USDT all disabled - this image is a node only, nothing else.
 
-From v4, Nito Core builds its Orchard proof engine in Rust even with the wallet turned off, so the builder stage is the official `rust` image for Debian bookworm, using the Rust version Nito Core pins in its `rust-toolchain.toml`.
+From v4, Nito Core builds its Orchard proof engine in Rust even with the wallet turned off, so the builder stage is the official `rust` image for the same Debian release as the runtime stage (Debian 13 trixie, set by `DEBIAN_RELEASE` in the Dockerfile), using the Rust version Nito Core pins in its `rust-toolchain.toml`.
 
 ## Nito Core version and updates
 
@@ -114,6 +114,8 @@ Every published image gets a version made of the Nito Core version and a build n
 Each published build has a [GitHub Release](https://github.com/Nito-Tools/docker-nito/releases) with the same name, listing what changed and the image digest. To stay on one exact build, pin the numbered tag, or the digest as the Umbrel app does: `ghcr.io/nito-tools/docker-nito:v4.0.0-1@sha256:...`.
 
 The image's labels record where it came from: `docker inspect` shows the docker-nito commit (`org.opencontainers.image.revision`), its version, and the Nito Core version and commit (`network.nito.core.version`, `network.nito.core.commit`).
+
+**Debian security updates.** Builds reuse cached layers, so a normal rebuild wouldn't pick up new Debian packages. On the 3rd of each month, the workflow checks the published image for Debian package updates. If there are any, it rebuilds without the cache and publishes the next build number, with the updated packages listed in its release. If there are none, nothing is built or published. To rebuild without the cache at any other time, run "Build and publish" by hand on `main` with "Rebuild without cache" ticked.
 
 Builds published before numbering started (`v3.0.1`, and the first `v4.0.0`) have no number or release.
 
