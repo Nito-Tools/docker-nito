@@ -1,16 +1,102 @@
 # docker-nito
 
-A Docker image that runs a full [Nito](https://nito.network/) node, compiled from source. No wallet, no GUI, no dashboard - just `nitod`, built for anyone wanting to run a Nito node via Docker.
+A Docker image that runs a full [Nito](https://nito.network/) node, compiled from source. No wallet, no GUI, no dashboard - just `nitod` and `nito-cli`, for anyone wanting to run a Nito node with Docker. Built for `linux/amd64` and `linux/arm64`.
 
-Used as the node container for the [saltedlolly/umbrel-app-store](https://github.com/saltedlolly/umbrel-app-store) `saltedlolly-nito` Umbrel package, paired with [nito-dashboard](https://github.com/saltedlolly/nito-dashboard) as a separate companion container for the web UI - see that repo for why the dashboard isn't bundled in here.
+```
+ghcr.io/nito-tools/docker-nito:latest
+ghcr.io/nito-tools/docker-nito:v4.0.0
+```
+
+## Easiest way: Umbrel
+
+If you have an [Umbrel](https://umbrel.com/) home server, the **Nito** app runs this image for you, with a dashboard showing new blocks, sync progress and a map of your peers. Add the community app store `https://github.com/saltedlolly/umbrel-app-store` in the Umbrel App Store (the menu at the top right, then Community App Stores), then install Nito. Details: [saltedlolly-nito](https://github.com/saltedlolly/umbrel-app-store/tree/master/saltedlolly-nito). The dashboard is a separate container, [nito-dashboard](https://github.com/saltedlolly/umbrel-app-store/tree/master/saltedlolly-nito/docker-containers/nito-dashboard), that talks to this one over RPC.
+
+## Running it with Docker
+
+**Mount a volume at `/data`.** Everything the node keeps (the blockchain, chainstate, indexes, peers, `nito.conf`) lives there. Without a volume, Docker gives the container an anonymous volume: a restart keeps it, but when you replace the container to upgrade (`docker rm` then `docker run` with the new image), the new container starts empty and syncs the whole chain again, while the old data sits orphaned on disk.
+
+With `docker run`:
+
+```bash
+docker volume create nito-data
+
+docker run -d --name nito \
+  --restart unless-stopped \
+  -v nito-data:/data \
+  -p 8820:8820 \
+  -e NITO_RPC_USER=nito \
+  -e NITO_RPC_PASSWORD='choose-a-long-random-password' \
+  ghcr.io/nito-tools/docker-nito:v4.0.0
+```
+
+To upgrade, pull the new image, then remove and recreate the container with the same `-v nito-data:/data`. The chain is kept.
+
+```bash
+docker pull ghcr.io/nito-tools/docker-nito:v4.0.0
+docker rm -f nito
+docker run -d --name nito ...   # the same command as above
+```
+
+With Docker Compose:
+
+```yaml
+services:
+  nito:
+    image: ghcr.io/nito-tools/docker-nito:v4.0.0
+    restart: unless-stopped
+    ports:
+      - "8820:8820"
+    environment:
+      NITO_RPC_USER: nito
+      NITO_RPC_PASSWORD: choose-a-long-random-password
+    volumes:
+      - nito-data:/data
+
+volumes:
+  nito-data:
+```
+
+Or use a host folder instead of a named volume, e.g. `-v /srv/nito:/data`. The container fixes the folder's ownership on start, so it doesn't matter who created it.
+
+Useful commands:
+
+```bash
+docker logs -f nito
+docker exec nito nito-cli -datadir=/data -conf=/data/nito.conf getblockchaininfo
+```
+
+Notes:
+
+- **Port 8820** is for other nodes to connect to yours. Forward it on your router to help the network. Don't publish the RPC port (8825) to the internet; containers on the same Docker network can reach it without publishing it.
+- **`nito.conf` is rewritten on every start** from the environment variables below, so change settings there, not in the file.
+- **There's no wallet.** The image is built without one, so there are no keys in the container to back up or lose.
+- **Backups:** the chain data can always be downloaded again, so there's no need to back up `blocks`, `chainstate` or `indexes` (they're most of the size).
 
 ## Why build from source
 
-No official Nito Docker image exists, and upstream's own published release binaries have no independent build attestation (no reproducible-build signing chain, and no CI builds the Linux/ARM64 binaries it actually publishes - they're uploaded manually). This image compiles `nitod`/`nito-cli` directly from [NitoNetwork/Nito-core](https://github.com/NitoNetwork/Nito-core)'s tagged source instead of trusting a pre-built binary, using Nito-core's own (inherited from Bitcoin Core, unmodified) `depends/` cross-compilation system.
+No official Nito Docker image exists, and upstream's own published release binaries have no independent build attestation: there's no reproducible-build signing chain, and the `SHA256SUMS` file is unsigned. (From v4.0.0 they're built by a GitHub Actions run in Nito-core and then attached to the release by hand; v3 and older were built and uploaded by hand.) This image compiles `nitod`/`nito-cli` directly from [NitoNetwork/Nito-core](https://github.com/NitoNetwork/Nito-core)'s tagged source instead of trusting a pre-built binary, using Nito-core's own (inherited from Bitcoin Core, unmodified) `depends/` cross-compilation system.
 
 ## Architecture
 
 Multi-arch, cross-compiling through `depends/` rather than emulating compilation under QEMU: the builder stage always runs natively on the build host (`--platform=$BUILDPLATFORM`), regardless of which architecture is being produced. Built with wallet/Qt/UPnP/NAT-PMP/ZMQ/USDT all disabled - this image is a node only, nothing else.
+
+From v4, Nito Core builds its Orchard proof engine in Rust even with the wallet turned off, so the builder stage is the official `rust` image for Debian bookworm, using the Rust version Nito Core pins in its `rust-toolchain.toml`.
+
+## Nito Core version and updates
+
+The Nito Core version is set in one place, the `ARG` lines at the top of the [Dockerfile](Dockerfile):
+
+- `NITO_CORE_TAG`: the release tag to build, e.g. `v4.0.0`.
+- `NITO_CORE_COMMIT`: the commit that tag pointed to when it was reviewed. The build fails if the tag has since been moved.
+- `RUST_VERSION`: must match the tag's `rust-toolchain.toml`. The build fails if it doesn't.
+
+Updates are automatic up to the point of publishing:
+
+1. Once a day, [check-nito-core.yml](.github/workflows/check-nito-core.yml) compares Nito Core's latest release with the Dockerfile. When there's a newer one, it opens a pull request that updates the three `ARG`s, with the release notes, the pinned commit and whether the tag is signed, and starts a test build.
+2. [build-publish.yml](.github/workflows/build-publish.yml) builds both architectures on every pull request without publishing anything.
+3. Merging to `main` publishes `ghcr.io/nito-tools/docker-nito:<tag>` and `:latest`.
+
+New Nito Core releases are often hard forks or need build changes (v4 added Rust), so a person reads the release notes and merges each update.
 
 ## Environment variables
 
