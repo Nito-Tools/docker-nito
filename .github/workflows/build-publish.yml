@@ -116,8 +116,15 @@ jobs:
           # so a run that pushed an image but failed to create its release
           # never has its number reused.
           git_tags="$(git ls-remote --tags --refs origin "refs/tags/$tag-*" | sed 's|.*refs/tags/||')"
-          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${IMAGE#ghcr.io/}:pull" | jq -r .token)"
-          image_tags="$(curl -fsS -H "Authorization: Bearer $token" "https://${IMAGE%%/*}/v2/${IMAGE#ghcr.io/}/tags/list" | jq -r '.tags[]?' || true)"
+          # GHCR refuses an anonymous token (403) for a package that doesn't
+          # exist yet (or isn't public), so before the first publish there
+          # are no image tags to count; the Git tags still are.
+          image_tags=""
+          if token="$(curl -fsS "https://ghcr.io/token?scope=repository:${IMAGE#ghcr.io/}:pull" | jq -er .token)"; then
+            image_tags="$(curl -fsS -H "Authorization: Bearer $token" "https://${IMAGE%%/*}/v2/${IMAGE#ghcr.io/}/tags/list" | jq -r '.tags[]?' || true)"
+          else
+            echo "::warning::Couldn't read the tags of $IMAGE (not published yet, or not public); numbering from Git tags only."
+          fi
           last="$(printf '%s\n%s\n' "$git_tags" "$image_tags" \
             | sed -n "s/^$(printf '%s' "$tag" | sed 's/\./\\./g')-\([0-9][0-9]*\)$/\1/p" \
             | sort -n | tail -1)"
