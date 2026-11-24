@@ -65,7 +65,7 @@ for pair in $INDEXES_OFF; do
   dir="$NET_DIR/indexes/$opt"
   if [ -d "$dir" ]; then
     size="$(du -sh "$dir" 2>/dev/null | cut -f1)"
-    echo "docker-nito: $var=0, removing $dir (${size:-unknown size})"
+    echo "nito-docker: $var=0, removing $dir (${size:-unknown size})"
     rm -rf "$dir"
   fi
 done

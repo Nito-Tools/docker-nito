@@ -1,14 +1,16 @@
-# docker-nito
+# nito-docker
 
 A Docker image that runs a full [Nito](https://nito.network/) node, compiled from source. No wallet, no GUI, no dashboard - just `nitod` and `nito-cli`, for anyone wanting to run a Nito node with Docker. Built for `linux/amd64` and `linux/arm64`.
 
 ```
-ghcr.io/nito-tools/docker-nito:latest     newest build of the newest Nito Core
-ghcr.io/nito-tools/docker-nito:v4.0.0     newest build of Nito Core v4.0.0
-ghcr.io/nito-tools/docker-nito:v4.0.0-1   one exact build, never changes
+ghcr.io/nito-tools/nito-docker:latest     newest build of the newest Nito Core
+ghcr.io/nito-tools/nito-docker:v4.0.0     newest build of Nito Core v4.0.0
+ghcr.io/nito-tools/nito-docker:v4.0.0-1   one exact build, never changes
 ```
 
 See [Versions and releases](#versions-and-releases).
+
+**Moved:** this repository and image used to be called `docker-nito`. Builds up to v4.0.0-3 stay at `ghcr.io/nito-tools/docker-nito`, but new builds are only published here, so switch to `ghcr.io/nito-tools/nito-docker`.
 
 ## Easiest way: Umbrel
 
@@ -29,13 +31,13 @@ docker run -d --name nito \
   -p 8820:8820 \
   -e NITO_RPC_USER=nito \
   -e NITO_RPC_PASSWORD='choose-a-long-random-password' \
-  ghcr.io/nito-tools/docker-nito:v4.0.0
+  ghcr.io/nito-tools/nito-docker:v4.0.0
 ```
 
 To upgrade, pull the new image, then remove and recreate the container with the same `-v nito-data:/data`. The chain is kept.
 
 ```bash
-docker pull ghcr.io/nito-tools/docker-nito:v4.0.0
+docker pull ghcr.io/nito-tools/nito-docker:v4.0.0
 docker rm -f nito
 docker run -d --name nito ...   # the same command as above
 ```
@@ -45,7 +47,7 @@ With Docker Compose:
 ```yaml
 services:
   nito:
-    image: ghcr.io/nito-tools/docker-nito:v4.0.0
+    image: ghcr.io/nito-tools/nito-docker:v4.0.0
     restart: unless-stopped
     ports:
       - "8820:8820"
@@ -111,9 +113,9 @@ Every published image gets a version made of the Nito Core version and a build n
 | `v4.0.0` | the newest build of Nito Core v4.0.0 | Yes, with each rebuild |
 | `latest` | the newest build of all | Yes |
 
-Each published build has a [GitHub Release](https://github.com/Nito-Tools/docker-nito/releases) with the same name, listing what changed and the image digest. To stay on one exact build, pin the numbered tag, or the digest as the Umbrel app does: `ghcr.io/nito-tools/docker-nito:v4.0.0-1@sha256:...`.
+Each published build has a [GitHub Release](https://github.com/Nito-Tools/nito-docker/releases) with the same name, listing what changed and the image digest. To stay on one exact build, pin the numbered tag, or the digest as the Umbrel app does: `ghcr.io/nito-tools/nito-docker:v4.0.0-1@sha256:...`.
 
-The image's labels record where it came from: `docker inspect` shows the docker-nito commit (`org.opencontainers.image.revision`), its version, and the Nito Core version and commit (`network.nito.core.version`, `network.nito.core.commit`).
+The image's labels record where it came from: `docker inspect` shows the nito-docker commit (`org.opencontainers.image.revision`), its version, and the Nito Core version and commit (`network.nito.core.version`, `network.nito.core.commit`).
 
 **Debian security updates.** Builds reuse cached layers, so a normal rebuild wouldn't pick up new Debian packages. On the 3rd of each month, the workflow checks the published image for Debian package updates. If there are any, it rebuilds without the cache and publishes the next build number, with the updated packages listed in its release. If there are none, nothing is built or published. To rebuild without the cache at any other time, run "Build and publish" by hand on `main` with "Rebuild without cache" ticked.
 
@@ -145,7 +147,7 @@ Builds published before numbering started (`v3.0.1`, and the first `v4.0.0`) hav
 ## Building locally
 
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t docker-nito .
+docker buildx build --platform linux/amd64,linux/arm64 -t nito-docker .
 ```
 
 ## Credits

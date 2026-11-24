@@ -47,7 +47,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  IMAGE: ghcr.io/nito-tools/docker-nito
+  IMAGE: ghcr.io/nito-tools/nito-docker
 
 jobs:
   debian-updates:
@@ -169,7 +169,7 @@ jobs:
           # them); annotations on the multi-arch index, which is what GHCR
           # reads to link the package to this repo and show a description.
           labels: |
-            org.opencontainers.image.title=docker-nito
+            org.opencontainers.image.title=nito-docker
             org.opencontainers.image.description=Nito full node (nitod and nito-cli), built from source
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -177,7 +177,7 @@ jobs:
             network.nito.core.version=${{ steps.version.outputs.tag }}
             network.nito.core.commit=${{ steps.version.outputs.commit }}
           annotations: |
-            index:org.opencontainers.image.title=docker-nito
+            index:org.opencontainers.image.title=nito-docker
             index:org.opencontainers.image.description=Nito full node (nitod and nito-cli), built from source
             index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             index:org.opencontainers.image.revision=${{ github.sha }}
