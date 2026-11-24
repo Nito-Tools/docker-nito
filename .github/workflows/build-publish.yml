@@ -47,7 +47,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  IMAGE: ghcr.io/nito-tools/docker-nito
+  IMAGE: ghcr.io/nito-tools/nito-docker
 
 jobs:
   debian-updates:
@@ -116,8 +116,15 @@ jobs:
           # so a run that pushed an image but failed to create its release
           # never has its number reused.
           git_tags="$(git ls-remote --tags --refs origin "refs/tags/$tag-*" | sed 's|.*refs/tags/||')"
-          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${IMAGE#ghcr.io/}:pull" | jq -r .token)"
-          image_tags="$(curl -fsS -H "Authorization: Bearer $token" "https://${IMAGE%%/*}/v2/${IMAGE#ghcr.io/}/tags/list" | jq -r '.tags[]?' || true)"
+          # GHCR refuses an anonymous token (403) for a package that doesn't
+          # exist yet (or isn't public), so before the first publish there
+          # are no image tags to count; the Git tags still are.
+          image_tags=""
+          if token="$(curl -fsS "https://ghcr.io/token?scope=repository:${IMAGE#ghcr.io/}:pull" | jq -er .token)"; then
+            image_tags="$(curl -fsS -H "Authorization: Bearer $token" "https://${IMAGE%%/*}/v2/${IMAGE#ghcr.io/}/tags/list" | jq -r '.tags[]?' || true)"
+          else
+            echo "::warning::Couldn't read the tags of $IMAGE (not published yet, or not public); numbering from Git tags only."
+          fi
           last="$(printf '%s\n%s\n' "$git_tags" "$image_tags" \
             | sed -n "s/^$(printf '%s' "$tag" | sed 's/\./\\./g')-\([0-9][0-9]*\)$/\1/p" \
             | sort -n | tail -1)"
@@ -169,7 +176,7 @@ jobs:
           # them); annotations on the multi-arch index, which is what GHCR
           # reads to link the package to this repo and show a description.
           labels: |
-            org.opencontainers.image.title=docker-nito
+            org.opencontainers.image.title=nito-docker
             org.opencontainers.image.description=Nito full node (nitod and nito-cli), built from source
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -177,7 +184,7 @@ jobs:
             network.nito.core.version=${{ steps.version.outputs.tag }}
             network.nito.core.commit=${{ steps.version.outputs.commit }}
           annotations: |
-            index:org.opencontainers.image.title=docker-nito
+            index:org.opencontainers.image.title=nito-docker
             index:org.opencontainers.image.description=Nito full node (nitod and nito-cli), built from source
             index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             index:org.opencontainers.image.revision=${{ github.sha }}
