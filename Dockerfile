@@ -29,8 +29,8 @@
 # reviewed, so the build fails if the tag is ever moved.
 # RUST_VERSION must match the tag's rust-toolchain.toml (Nito Core v4+
 # builds its Orchard proof engine in Rust, even with the wallet off).
-ARG NITO_CORE_TAG=v4.0.0
-ARG NITO_CORE_COMMIT=e3ff5e42b980c792ee5ab790610772a7d9ee8f8a
+ARG NITO_CORE_TAG=v4.1.0
+ARG NITO_CORE_COMMIT=460a0d1da6e7b2b6e3fd117c151b9d2bc764015a
 ARG RUST_VERSION=1.97.0
 # Debian release for both stages. They must match: nitod is built against
 # the builder's glibc and has to run on the same one. Change it by hand
