@@ -1,10 +1,14 @@
 name: Check for a new Nito Core release
 
 # Once a day, compare Nito Core's latest release with the version in the
-# Dockerfile. When there's a newer one, open a pull request that updates
-# NITO_CORE_TAG, NITO_CORE_COMMIT and RUST_VERSION, then start a test
-# build on it. Nothing is published until a person reviews the release
-# notes and merges the pull request.
+# Dockerfile. When there's a newer one, check its Linux release files with
+# scripts/verify-nito-core-release.sh (Minisign-signed SHA256SUMS and
+# GitHub build attestations), then open a pull request that updates
+# NITO_CORE_TAG, NITO_CORE_COMMIT, NITO_CORE_SHA256_AMD64/ARM64 and
+# RUST_VERSION, and start a test build on it. If the release's files aren't
+# all there yet it tries again the next day; if they fail the checks, the
+# run fails and no pull request is opened. Nothing is published until a
+# person reviews the release notes and merges the pull request.
 #
 # Needs "Allow GitHub Actions to create and approve pull requests" on in
 # Settings > Actions > General.
@@ -18,6 +22,7 @@ permissions:
   contents: write
   pull-requests: write
   actions: write
+  attestations: read
 
 concurrency:
   group: check-nito-core
@@ -94,8 +99,38 @@ jobs:
             echo "rust=$rust"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Open a pull request
+      - name: Check the release has its Linux files
         if: steps.compare.outputs.update == 'true'
+        id: assets
+        env:
+          LATEST: ${{ steps.compare.outputs.latest }}
+        run: |
+          set -euo pipefail
+          v="${LATEST#v}"
+          have="$(gh release view "$LATEST" -R "$UPSTREAM" --json assets --jq '.assets[].name')"
+          missing=""
+          for f in SHA256SUMS SHA256SUMS.minisig "nito-$v-x86_64-linux-gnu.tar.gz" "nito-$v-aarch64-linux-gnu.tar.gz"; do
+            grep -qxF "$f" <<<"$have" || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::$LATEST is missing:$missing. Trying again tomorrow."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify the release files
+        if: steps.compare.outputs.update == 'true' && steps.assets.outputs.ready == 'true'
+        id: verify
+        env:
+          LATEST: ${{ steps.compare.outputs.latest }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign >/dev/null
+          scripts/verify-nito-core-release.sh "$LATEST" >> "$GITHUB_OUTPUT"
+
+      - name: Open a pull request
+        if: steps.compare.outputs.update == 'true' && steps.assets.outputs.ready == 'true'
         env:
           CURRENT: ${{ steps.compare.outputs.current }}
           LATEST: ${{ steps.compare.outputs.latest }}
@@ -103,10 +138,14 @@ jobs:
           COMMIT: ${{ steps.tag.outputs.commit }}
           SIGNED: ${{ steps.tag.outputs.signed }}
           RUST: ${{ steps.tag.outputs.rust }}
+          SHA256_AMD64: ${{ steps.verify.outputs.amd64 }}
+          SHA256_ARM64: ${{ steps.verify.outputs.arm64 }}
         run: |
           set -euo pipefail
           sed -i "s/^ARG NITO_CORE_TAG=.*/ARG NITO_CORE_TAG=$LATEST/" Dockerfile
           sed -i "s/^ARG NITO_CORE_COMMIT=.*/ARG NITO_CORE_COMMIT=$COMMIT/" Dockerfile
+          sed -i "s/^ARG NITO_CORE_SHA256_AMD64=.*/ARG NITO_CORE_SHA256_AMD64=$SHA256_AMD64/" Dockerfile
+          sed -i "s/^ARG NITO_CORE_SHA256_ARM64=.*/ARG NITO_CORE_SHA256_ARM64=$SHA256_ARM64/" Dockerfile
           if [ -n "$RUST" ]; then
             sed -i "s/^ARG RUST_VERSION=.*/ARG RUST_VERSION=$RUST/" Dockerfile
           fi
@@ -125,7 +164,9 @@ jobs:
             echo "- Changes: https://github.com/$UPSTREAM/compare/$CURRENT...$LATEST"
             echo "- Commit pinned: \`$COMMIT\`"
             echo "- Tag signed: $SIGNED"
-            echo "- Rust toolchain: ${RUST:-none (no rust-toolchain.toml)}"
+            echo "- Rust toolchain (for NITO_BUILD=source): ${RUST:-none (no rust-toolchain.toml)}"
+            echo "- Release files verified: Minisign signature on SHA256SUMS, GitHub build attestations from Nito Core's build-release.yml"
+            echo "- Linux tarball SHA256 pinned: amd64 \`$SHA256_AMD64\`, arm64 \`$SHA256_ARM64\`"
             echo
             echo "A test build of both architectures has been started on this branch; its result shows in the checks below. Nothing is published until this is merged."
             echo
