@@ -73,6 +73,10 @@ done
 CONF_FILE="$DATA_DIR/nito.conf"
 {
   echo "server=1"
+  # Node only. The official release binaries include the wallet (a source
+  # build leaves it out, and accepts this option anyway); pass
+  # -disablewallet=0 to the container to turn it on.
+  echo "disablewallet=1"
   echo "rpcuser=${NITO_RPC_USER}"
   echo "rpcpassword=${NITO_RPC_PASSWORD}"
   [ "$NETWORK" = "test" ] && echo "testnet=1"

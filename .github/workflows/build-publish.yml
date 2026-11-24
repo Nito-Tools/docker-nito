@@ -3,6 +3,13 @@ name: Build and publish
 # The Nito Core version comes from the ARG lines at the top of the
 # Dockerfile, so there is one place to change it.
 #
+# Published images use Nito Core's official Linux release binaries
+# (NITO_BUILD=release). Before building, scripts/verify-nito-core-release.sh
+# checks the release's Minisign-signed SHA256SUMS, its GitHub build
+# attestations and the checksums pinned in the Dockerfile. A manual run can
+# choose NITO_BUILD=source instead, to check the compile-from-source option
+# still works; those builds are never published.
+#
 # - Pull requests (and manual runs on any branch other than main) build
 #   both architectures as a test, without publishing anything.
 # - Pushes to main, and manual runs on main, build and publish to GHCR,
@@ -36,10 +43,16 @@ on:
         description: 'Rebuild without cache (picks up new Debian packages)'
         type: boolean
         default: false
+      nito_build:
+        description: 'Where nitod comes from: release (official binaries, published) or source (compile, about an hour; test only, never published)'
+        type: choice
+        options: [release, source]
+        default: release
 
 permissions:
   contents: write
   packages: write
+  attestations: read
 
 concurrency:
   group: build-${{ github.ref }}
@@ -97,6 +110,8 @@ jobs:
 
       - name: Work out the version
         id: version
+        env:
+          NITO_BUILD_INPUT: ${{ inputs.nito_build }}
         run: |
           set -euo pipefail
           tag="$(sed -n 's/^ARG NITO_CORE_TAG=//p' Dockerfile)"
@@ -105,7 +120,8 @@ jobs:
             echo "::error::Couldn't read NITO_CORE_TAG and NITO_CORE_COMMIT from the Dockerfile"
             exit 1
           fi
-          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+          build="${NITO_BUILD_INPUT:-release}"
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ "$build" = "release" ]; then
             publish=true
           else
             publish=false
@@ -135,9 +151,10 @@ jobs:
             echo "commit=$commit"
             echo "version=$version"
             echo "publish=$publish"
+            echo "build=$build"
           } >> "$GITHUB_OUTPUT"
           {
-            echo "Nito Core $tag (\`$commit\`)"
+            echo "Nito Core $tag (\`$commit\`), NITO_BUILD=$build"
             if [ "$publish" = "true" ]; then
               echo
               echo "Publishing as **$version**, \`:$tag\` and \`:latest\`."
@@ -146,6 +163,19 @@ jobs:
               echo "Test build only, not published (would be $version)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify Nito Core's release files
+        if: steps.version.outputs.build == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign >/dev/null
+          amd64="$(sed -n 's/^ARG NITO_CORE_SHA256_AMD64=//p' Dockerfile)"
+          arm64="$(sed -n 's/^ARG NITO_CORE_SHA256_ARM64=//p' Dockerfile)"
+          scripts/verify-nito-core-release.sh "$TAG" "$amd64" "$arm64"
+          echo "Release files verified: Minisign signature, SHA256SUMS, build attestations, pinned checksums." >> "$GITHUB_STEP_SUMMARY"
 
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
@@ -168,6 +198,8 @@ jobs:
           no-cache: ${{ github.event_name == 'schedule' || inputs.no_cache == true }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            NITO_BUILD=${{ steps.version.outputs.build }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
             ${{ env.IMAGE }}:${{ steps.version.outputs.tag }}
@@ -177,7 +209,7 @@ jobs:
           # reads to link the package to this repo and show a description.
           labels: |
             org.opencontainers.image.title=nito-docker
-            org.opencontainers.image.description=Nito full node (nitod and nito-cli), built from source
+            org.opencontainers.image.description=Nito full node (nitod and nito-cli) from Nito Core's verified release binaries
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -185,7 +217,7 @@ jobs:
             network.nito.core.commit=${{ steps.version.outputs.commit }}
           annotations: |
             index:org.opencontainers.image.title=nito-docker
-            index:org.opencontainers.image.description=Nito full node (nitod and nito-cli), built from source
+            index:org.opencontainers.image.description=Nito full node (nitod and nito-cli) from Nito Core's verified release binaries
             index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             index:org.opencontainers.image.revision=${{ github.sha }}
             index:org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -214,7 +246,7 @@ jobs:
               echo "Rebuilt without cache (started by hand), picking up the latest Debian packages."
               echo
             fi
-            echo "Nito Core **$TAG** ([release notes](https://github.com/NitoNetwork/Nito-core/releases/tag/$TAG)), built from source at \`$COMMIT\`, for linux/amd64 and linux/arm64."
+            echo "Nito Core **$TAG** ([release notes](https://github.com/NitoNetwork/Nito-core/releases/tag/$TAG), commit \`$COMMIT\`), for linux/amd64 and linux/arm64, using Nito Core's official release binaries. Checked before building: the Minisign signature on SHA256SUMS, the GitHub build attestations (Nito Core's build-release.yml) and the checksums pinned in the Dockerfile."
             echo
             echo '```'
             echo "docker pull $IMAGE:$VERSION"
